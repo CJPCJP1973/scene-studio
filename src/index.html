@@ -95,6 +95,7 @@ h2{font-size:15px;margin:2px 0 8px}
 <input type="file" id="fImg" accept="image/*" hidden>
 <input type="file" id="fImgs" accept="image/*" multiple hidden>
 <input type="file" id="fVid" accept="video/*" multiple hidden>
+<input type="file" id="fSceneVid" accept="video/*" hidden>
 <input type="file" id="fMus" accept="audio/*" hidden>
 <input type="file" id="fVo" accept="audio/*" hidden>
 <input type="file" id="fSrt" accept=".srt,.vtt,text/plain" hidden>
@@ -259,7 +260,7 @@ function renderList(){
   <textarea data-f="text" placeholder="Narration or caption for this scene…">${esc(s.text)}</textarea>
   <div class="row"><button class="btn p sm" data-a="vo">🎙 Voiceover</button><label><input type="checkbox" data-f="vo" ${s.vo?'checked':''}> Play on timeline</label><span class="hint">Preview, and fit scene length to the script.</span></div>
   <textarea data-f="imgPrompt" placeholder="Image prompt: what should this scene look like?">${esc(s.imgPrompt)}</textarea>
-  <div class="row"><button class="btn sm" data-a="img">🖼 Add image</button><button class="btn sm" data-a="cp">Copy image prompt</button>${s.img?'<button class="btn sm" data-a="rmimg">Remove image</button>':''}${s.vid?'<button class="btn sm" data-a="rmvid">Remove video</button>':''}</div>
+  <div class="row"><button class="btn sm" data-a="img">🖼 Add image</button><button class="btn sm" data-a="vid">🎬 ${s.vid?'Replace video':'Upload video'}</button><button class="btn sm" data-a="cp">Copy image prompt</button>${s.img?'<button class="btn sm" data-a="rmimg">Remove image</button>':''}${s.vid?'<button class="btn sm" data-a="rmvid">Remove video</button>':''}</div>
   <textarea data-f="animPrompt" placeholder="Animation prompt: e.g. slow zoom in, drift left, handheld shake…">${esc(s.animPrompt)}</textarea>
   <div class="row"><label>Motion <select data-f="anim">${[['in','Zoom in'],['out','Zoom out'],['left','Pan left'],['right','Pan right'],['shake','Handheld'],['none','Still']].map(o=>`<option value="${o[0]}" ${s.anim===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></label><span class="hint">Keywords in the prompt pick the motion.</span></div>
   <div class="row"><label>Transition in <select data-f="tr">${[['fade','Fade'],['slide','Slide'],['zoom','Zoom'],['wipe','Wipe'],['cut','Cut']].map(o=>`<option value="${o[0]}" ${(s.tr||'fade')===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></label></div>
@@ -285,6 +286,7 @@ list.addEventListener('click',e=>{
   if(a==='del'){rmVid(s);S.scenes.splice(i,1);S.sel=Math.max(0,Math.min(S.sel,S.scenes.length-1));t=Math.min(t,total())}
   if(a==='vo'){s.vo=true;const w=s.text.trim().split(/\s+/).filter(Boolean).length;if(w)s.dur=Math.max(2,Math.round((w/(2.5*S.rate)+.6)*10)/10);else toast('Write a script first');say(s.text)}
   if(a==='img'){pend=i;$('#fImg').click();return}
+  if(a==='vid'){pend=i;if(!window.showOpenFilePicker){$('#fSceneVid').click();return}pickVideos(false).then(fs=>fs===null?$('#fSceneVid').click():attachVid(fs[0]));return}
   if(a==='cp'){copy(s.imgPrompt||'');return}
   if(a==='rmimg'){s.img='';delete imgs[s.id]}
   if(a==='rmvid')rmVid(s);
@@ -296,8 +298,28 @@ function renderAll(){renderList();renderTL();draw();ph();save()}
 $('#fImg').onchange=e=>{const f=e.target.files[0];if(f){setImg(S.scenes[pend],URL.createObjectURL(f));renderAll()}e.target.value=''};
 $('#addImgs').onclick=()=>$('#fImgs').click();
 $('#fImgs').onchange=e=>{[...e.target.files].forEach(f=>{const s=mk({dur:3,anim:['in','out','left','right'][S.scenes.length%4]});setImg(s,URL.createObjectURL(f));S.scenes.push(s)});S.sel=Math.max(0,S.scenes.length-1);renderAll();e.target.value='';toast('Images added as scenes')};
-$('#addVid').onclick=()=>$('#fVid').click();
-$('#fVid').onchange=e=>{const fs=[...e.target.files];e.target.value='';if(!fs.length)return;fs.forEach(addVid);S.sel=S.scenes.length-1;renderAll();toast(fs.length>1?'Videos added as scenes':'Video added as a scene')};
+/* Chrome/Edge on desktop can open the picker in Downloads; other browsers use the normal picker */
+async function pickVideos(multiple){
+  try{
+    const hs=await showOpenFilePicker({multiple,id:'scene-videos',startIn:'downloads',types:[{description:'Videos',accept:{'video/*':['.mp4','.mov','.m4v','.webm','.mkv']}}]});
+    return await Promise.all(hs.map(h=>h.getFile()));
+  }catch(e){return e.name==='AbortError'?[]:null}
+}
+function addVids(fs){if(!fs.length)return;fs.forEach(addVid);S.sel=S.scenes.length-1;renderAll();toast(fs.length>1?'Videos added as scenes':'Video added as a scene')}
+$('#addVid').onclick=()=>{
+  if(!window.showOpenFilePicker)return $('#fVid').click();
+  pickVideos(true).then(fs=>fs===null?$('#fVid').click():addVids(fs));
+};
+$('#fVid').onchange=e=>{const fs=[...e.target.files];e.target.value='';addVids(fs)};
+$('#fSceneVid').onchange=e=>{const f=e.target.files[0];e.target.value='';attachVid(f)};
+function attachVid(f){
+  const s=S.scenes[pend];if(!f||!s)return;
+  rmVid(s);s.vid=URL.createObjectURL(f);s.anim='none';
+  const v=vids[s.id]=mkVid(s.vid);
+  v.onloadedmetadata=()=>{if(isFinite(v.duration)){s.dur=Math.max(.5,Math.round(v.duration*10)/10);renderAll()}};
+  v.onerror=()=>{toast('Could not read '+f.name);rmVid(s);renderAll()};
+  renderAll();toast('Video added to scene '+(pend+1));
+}
 $('#addScene').onclick=()=>{S.scenes.splice(S.sel+1,0,mk());S.sel=Math.min(S.sel+1,S.scenes.length-1);renderAll()};
 $('#addMusic').onclick=()=>$('#fMus').click();
 $('#fMus').onchange=e=>{const f=e.target.files[0];if(!f)return;au.src=URL.createObjectURL(f);au.volume=S.mvol;S.music=f.name;au.onloadedmetadata=renderTL;$('#rmMusic').hidden=false;toast('Music added to timeline');e.target.value=''};
